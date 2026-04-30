@@ -57,15 +57,14 @@ sed -i "s|/system/bin/linker|${TERMUX_PREFIX}/lib/linker|g" gcc/config/linux-and
 sed -i "s|/system/bin/linker64|${TERMUX_PREFIX}/lib/linker64|g" gcc/config/linux-android.h || true
 
 # Patch B: Inject Termux Library Search Paths into Android Spec
-# Forces the compiler to naturally look in Termux's /usr/lib rather than standard Linux /usr/lib
 sed -i "s|-X|-X -rpath=${TERMUX_PREFIX}/lib -L${TERMUX_PREFIX}/lib|g" gcc/config/linux-android.h || true
 sed -i "s|-rpath-link|-rpath-link=${TERMUX_PREFIX}/lib -rpath-link|g" gcc/config/linux-android.h || true
 
-# Patch C: Bionic libc compatibility (Disable pthread_cancel in gthr-posix.h)
+# Patch C: Universal Bionic libc compatibility (Disable pthread_cancel)
 # Bionic doesn't support thread cancellation. Standard libgcc compilation fails without this.
-if[ -f "libgcc/gthr-posix.h" ]; then
-    sed -i 's/.*pthread_cancel.*/\/\/ Removed for Android Bionic compatibility/g' libgcc/gthr-posix.h
-fi
+# Instead of a static file check, we aggressively find and patch all gthr-posix.h variants in the tree.
+echo "[*] Purging pthread_cancel for Android Bionic compatibility..."
+find . -type f -name "gthr-posix.h" -exec sed -i 's/.*pthread_cancel.*/\/\/ Removed for Android Bionic compatibility/g' {} + || true
 
 # Patch D: Prevent Limits.h generation issues on cross-compiles
 sed -i 's|#define LIMITS_H_TEST true|#define LIMITS_H_TEST false|g' gcc/Makefile.in || true
