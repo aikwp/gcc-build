@@ -1,0 +1,109 @@
+name: Universal GCC 16 Build Pipeline (Android/Termux)
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*.*.*' ]
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  build-docker:
+    name: Step 1 - Prepare & Publish Docker Image
+    runs-on: ubuntu-24.04
+    outputs:
+      image_tag: ${{ steps.set-image.outputs.tag }}
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Calculate Dockerfile Hash
+        id: set-image
+        run: |
+          # Convert repository name to lowercase for GHCR compatibility
+          REPO_LOWER=$(echo "${{ github.repository }}" | tr '[:upper:]' '[:lower:]')
+          DOCKER_HASH=$(sha256sum docker/Dockerfile | awk '{print $1}')
+          IMAGE_TAG="${{ env.REGISTRY }}/${REPO_LOWER}/gcc-ndk29-builder:${DOCKER_HASH}"
+          echo "tag=${IMAGE_TAG}" >> $GITHUB_OUTPUT
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check if Image Exists
+        id: check-image
+        run: |
+          if docker pull ${{ steps.set-image.outputs.tag }}; then
+            echo "Image exists in GHCR. Skipping build."
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "Image not found. Will build."
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Set up Docker Buildx
+        if: steps.check-image.outputs.exists == 'false'
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and Push Docker Image
+        if: steps.check-image.outputs.exists == 'false'
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: docker/Dockerfile
+          push: true
+          tags: ${{ steps.set-image.outputs.tag }}
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ github.repository_owner }}/gcc-ndk29-builder:buildcache
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ github.repository_owner }}/gcc-ndk29-builder:buildcache,mode=max
+
+  build-gcc:
+    name: Step 2 - Build Universal GCC
+    needs: build-docker
+    runs-on: ubuntu-24.04
+    container:
+      image: ${{ needs.build-docker.outputs.image_tag }}
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Run Heavy Compilation Script
+        run: |
+          # Execute natively inside the pre-provisioned container
+          bash scripts/build.sh
+
+      - name: Upload Artifacts (Action)
+        uses: actions/upload-artifact@v4
+        with:
+          name: termux-gcc-16-package
+          path: '*.deb'
+          retention-days: 7
+
+      - name: Create GitHub Release
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          files: |
+            *.deb
+            *.tar.gz
+          tag_name: "v16.0.0-ndk29"
+          name: "GCC 16 Universal Termux Build (NDK 29)"
+          body: "Automated, heavily-patched production build of GCC-16 for Android API 24."
+          draft: false
+          prerelease: false
