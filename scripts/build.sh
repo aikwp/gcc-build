@@ -62,7 +62,11 @@ sed -i 's|$(GCC_FOR_TARGET) -dumpspecs > tmp-specs|echo "" > tmp-specs|g' gcc/Ma
 # Patch F: Bypass GCC self-tests (Fixes: clang: error: unknown argument: '-fself-test')
 echo "[*] Bypassing internal GCC self-tests (incompatible with Clang CC_FOR_TARGET)..."
 sed -i 's/-fself-test=[^ ]*//g' gcc/Makefile.in || true
-find gcc -type f -name "Make-lang.in" -exec sed -i 's/-fself-test=[^ ]*//g' {} +
+find gcc -type f -name "Make-lang.in" -exec sed -i 's/-fself-test=[^ ]*//g' {} + || true
+
+# Patch G: Bypass GCC libgcc flag (Fixes: clang: error: unknown argument: '-fbuilding-libgcc')
+echo "[*] Stripping GCC-specific -fbuilding-libgcc flag from libgcc Makefiles..."
+find libgcc -type f -exec sed -i 's/-fbuilding-libgcc//g' {} + || true
 
 echo "[*] Downloading GNU prerequisites (GMP, MPFR, MPC)..."
 ./contrib/download_prerequisites
