@@ -56,9 +56,10 @@ cd ..
 mkdir -p build-gcc
 cd build-gcc
 
-echo "[*] Configuring GCC (Strictly passing variables to prevent environment bleeding)..."
+echo "[*] Configuring GCC (Enforcing Host-PIE to satisfy Android strictness)..."
 
-# No global exports. All flags are passed safely.
+# Note: Removed manual -fPIC. Added --enable-host-pie and --enable-host-bind-now.
+# Added -Wl,--no-relax to avoid LLD AArch64 strict relocation bugs.
 ../gcc/configure \
     --build=x86_64-pc-linux-gnu \
     --host=${TARGET} \
@@ -88,9 +89,9 @@ echo "[*] Configuring GCC (Strictly passing variables to prevent environment ble
     RANLIB_FOR_TARGET="${TOOLCHAIN}/bin/llvm-ranlib" \
     NM_FOR_TARGET="${TOOLCHAIN}/bin/llvm-nm" \
     STRIP_FOR_TARGET="${TOOLCHAIN}/bin/llvm-strip" \
-    CFLAGS="-O2 -fPIC" \
-    CXXFLAGS="-O2 -fPIC" \
-    LDFLAGS="-Wl,-rpath=${TERMUX_PREFIX}/lib -Wl,--enable-new-dtags -L${TERMUX_PREFIX}/lib" \
+    CFLAGS="-O2" \
+    CXXFLAGS="-O2" \
+    LDFLAGS="-Wl,-rpath=${TERMUX_PREFIX}/lib -Wl,--enable-new-dtags -L${TERMUX_PREFIX}/lib -Wl,--no-relax" \
     CPPFLAGS="-I${TERMUX_PREFIX}/include" \
     --enable-languages=c,c++ \
     --disable-multilib \
@@ -102,6 +103,8 @@ echo "[*] Configuring GCC (Strictly passing variables to prevent environment ble
     --disable-libitm \
     --enable-shared \
     --enable-initfini-array \
+    --enable-host-pie \
+    --enable-host-bind-now \
     --enable-threads=posix \
     --with-system-zlib \
     --enable-default-pie \
@@ -141,7 +144,6 @@ dpkg-deb --build ${STAGING_DIR} gcc-16-termux.deb
 
 # Compressed backup sysroot artifact (using xz/lzma for massive compression gains)
 echo "[*] Archiving sysroot with xz compression (this may take a moment)..."
-# -c: create, -J: use xz compression, -f: to file
 tar -cJf gcc-16-termux-sysroot.tar.xz -C ${STAGING_DIR} .
 
 echo "[*] Pipeline complete!"
