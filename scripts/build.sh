@@ -55,9 +55,14 @@ find . -type f -name "gthr-posix.h" -exec sed -i 's/.*pthread_cancel.*/\/\/ Remo
 # Patch D: Prevent Limits.h generation issues on cross-compiles
 sed -i 's|#define LIMITS_H_TEST true|#define LIMITS_H_TEST false|g' gcc/Makefile.in || true
 
-# Patch E: Bypass `-dumpspecs` failure on NDK Clang (Critical Fix)
+# Patch E: Bypass `-dumpspecs` failure on NDK Clang
 echo "[*] Bypassing dumpspecs to prevent Clang crossed-native crash..."
 sed -i 's|$(GCC_FOR_TARGET) -dumpspecs > tmp-specs|echo "" > tmp-specs|g' gcc/Makefile.in || true
+
+# Patch F: Bypass GCC self-tests (Fixes: clang: error: unknown argument: '-fself-test')
+echo "[*] Bypassing internal GCC self-tests (incompatible with Clang CC_FOR_TARGET)..."
+sed -i 's/-fself-test=[^ ]*//g' gcc/Makefile.in || true
+find gcc -type f -name "Make-lang.in" -exec sed -i 's/-fself-test=[^ ]*//g' {} +
 
 echo "[*] Downloading GNU prerequisites (GMP, MPFR, MPC)..."
 ./contrib/download_prerequisites
