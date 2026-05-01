@@ -11,34 +11,15 @@ TARGET="aarch64-linux-android"
 API_LEVEL="24"
 TERMUX_PREFIX="/data/data/com.termux/files/usr"
 
-# 1. Setup Host Toolchain Variables
-export CC_FOR_BUILD="gcc"
-export CXX_FOR_BUILD="g++"
-export LD_FOR_BUILD="ld"
-export AR_FOR_BUILD="ar"
-export AS_FOR_BUILD="as"
-export RANLIB_FOR_BUILD="ranlib"
-
-# 2. Setup Target Toolchain Variables (NDK LLVM)
+# 1. Setup Target Toolchain Variables (NDK LLVM)
 TOOLCHAIN="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64"
-export AR="${TOOLCHAIN}/bin/llvm-ar"
-export AS="${TOOLCHAIN}/bin/llvm-as"
-export CC="${TOOLCHAIN}/bin/${TARGET}${API_LEVEL}-clang"
-export CXX="${TOOLCHAIN}/bin/${TARGET}${API_LEVEL}-clang++"
-export LD="${TOOLCHAIN}/bin/ld.lld"
-export RANLIB="${TOOLCHAIN}/bin/llvm-ranlib"
-export STRIP="${TOOLCHAIN}/bin/llvm-strip"
+TARGET_CLANG="${TOOLCHAIN}/bin/${TARGET}${API_LEVEL}-clang"
+TARGET_CLANGXX="${TOOLCHAIN}/bin/${TARGET}${API_LEVEL}-clang++"
 
-# 3. Environment Headers & Linkers Flags
-export LDFLAGS="-Wl,-rpath=${TERMUX_PREFIX}/lib -Wl,--enable-new-dtags -L${TERMUX_PREFIX}/lib"
-export CPPFLAGS="-I${TERMUX_PREFIX}/include"
-export CXXFLAGS="-O2 -fPIC"
-export CFLAGS="-O2 -fPIC"
-
-# Mock the environment to prevent build-time linker warnings
+# 2. Mock the environment to prevent build-time linker errors for empty dirs
 mkdir -p "${TERMUX_PREFIX}/lib" "${TERMUX_PREFIX}/include"
 
-# 4. Fetch GCC Source
+# 3. Fetch GCC Source
 if [ ! -d "gcc" ]; then
     echo "[*] Cloning GCC repository (branch: ${GCC_BRANCH})..."
     git clone --depth 1 -b ${GCC_BRANCH} https://gcc.gnu.org/git/gcc.git gcc
@@ -47,7 +28,7 @@ fi
 cd gcc
 
 # ====================================================================
-# 5. THE HEAVY PATCHES (UNIVERSAL ANDROID & TERMUX INTEGRATION)
+# 4. THE HEAVY PATCHES (UNIVERSAL ANDROID & TERMUX INTEGRATION)
 # ====================================================================
 echo "[*] Applying heavy expert patches for Android/Bionic & Termux..."
 
@@ -61,8 +42,6 @@ sed -i "s|-X|-X -rpath=${TERMUX_PREFIX}/lib -L${TERMUX_PREFIX}/lib|g" gcc/config
 sed -i "s|-rpath-link|-rpath-link=${TERMUX_PREFIX}/lib -rpath-link|g" gcc/config/linux-android.h || true
 
 # Patch C: Universal Bionic libc compatibility (Disable pthread_cancel)
-# Bionic doesn't support thread cancellation. Standard libgcc compilation fails without this.
-# Instead of a static file check, we aggressively find and patch all gthr-posix.h variants in the tree.
 echo "[*] Purging pthread_cancel for Android Bionic compatibility..."
 find . -type f -name "gthr-posix.h" -exec sed -i 's/.*pthread_cancel.*/\/\/ Removed for Android Bionic compatibility/g' {} + || true
 
@@ -73,12 +52,13 @@ echo "[*] Downloading GNU prerequisites (GMP, MPFR, MPC)..."
 ./contrib/download_prerequisites
 cd ..
 
-# 6. Configure GCC
+# 5. Configure GCC
 mkdir -p build-gcc
 cd build-gcc
 
-echo "[*] Configuring GCC..."
-# We use initfini-array because Android API 24 completely deprecates .ctors/.dtors
+echo "[*] Configuring GCC (Strictly passing variables to prevent environment bleeding)..."
+
+# Note: We NO LONGER use global `export`. All flags are passed safely.
 ../gcc/configure \
     --build=x86_64-pc-linux-gnu \
     --host=${TARGET} \
@@ -86,10 +66,40 @@ echo "[*] Configuring GCC..."
     --prefix=${TERMUX_PREFIX} \
     --with-local-prefix=${TERMUX_PREFIX} \
     --with-sysroot=${TOOLCHAIN}/sysroot \
+    CC_FOR_BUILD="gcc" \
+    CXX_FOR_BUILD="g++" \
+    CFLAGS_FOR_BUILD="-O2" \
+    CXXFLAGS_FOR_BUILD="-O2" \
+    LDFLAGS_FOR_BUILD="" \
+    CPPFLAGS_FOR_BUILD="" \
+    CC="${TARGET_CLANG}" \
+    CXX="${TARGET_CLANGXX}" \
+    CC_FOR_TARGET="${TARGET_CLANG}" \
+    CXX_FOR_TARGET="${TARGET_CLANGXX}" \
+    AR="${TOOLCHAIN}/bin/llvm-ar" \
+    AS="${TOOLCHAIN}/bin/llvm-as" \
+    LD="${TOOLCHAIN}/bin/ld.lld" \
+    RANLIB="${TOOLCHAIN}/bin/llvm-ranlib" \
+    NM="${TOOLCHAIN}/bin/llvm-nm" \
+    STRIP="${TOOLCHAIN}/bin/llvm-strip" \
+    AR_FOR_TARGET="${TOOLCHAIN}/bin/llvm-ar" \
+    AS_FOR_TARGET="${TOOLCHAIN}/bin/llvm-as" \
+    LD_FOR_TARGET="${TOOLCHAIN}/bin/ld.lld" \
+    RANLIB_FOR_TARGET="${TOOLCHAIN}/bin/llvm-ranlib" \
+    NM_FOR_TARGET="${TOOLCHAIN}/bin/llvm-nm" \
+    STRIP_FOR_TARGET="${TOOLCHAIN}/bin/llvm-strip" \
+    CFLAGS="-O2 -fPIC" \
+    CXXFLAGS="-O2 -fPIC" \
+    LDFLAGS="-Wl,-rpath=${TERMUX_PREFIX}/lib -Wl,--enable-new-dtags -L${TERMUX_PREFIX}/lib" \
+    CPPFLAGS="-I${TERMUX_PREFIX}/include" \
     --enable-languages=c,c++ \
     --disable-multilib \
     --disable-nls \
     --disable-libsanitizer \
+    --disable-libssp \
+    --disable-libgomp \
+    --disable-libquadmath \
+    --disable-libitm \
     --enable-shared \
     --enable-initfini-array \
     --enable-threads=posix \
@@ -98,16 +108,16 @@ echo "[*] Configuring GCC..."
     --with-arch=armv8-a \
     --disable-werror
 
-# 7. Build GCC
+# 6. Build GCC
 echo "[*] Compiling GCC natively for Target Architecture (aarch64)..."
 make -j$(nproc)
 
-# 8. Install to Staging
+# 7. Install to Staging
 echo "[*] Installing to staging directory..."
 STAGING_DIR="${GITHUB_WORKSPACE}/termux-pkg"
 make DESTDIR=${STAGING_DIR} install
 
-# 9. Packaging (.deb)
+# 8. Packaging (.deb)
 echo "[*] Packaging into a Universal Termux compatible .deb file..."
 cd ${GITHUB_WORKSPACE}
 
@@ -124,8 +134,8 @@ EOF
 
 # Vigorously strip compiler executables to minimize the final .deb package footprint
 echo "[*] Stripping target binaries..."
-find ${STAGING_DIR}${TERMUX_PREFIX}/bin -type f -executable -exec ${STRIP} {} + || true
-find ${STAGING_DIR}${TERMUX_PREFIX}/libexec -type f -executable -exec ${STRIP} {} + || true
+find ${STAGING_DIR}${TERMUX_PREFIX}/bin -type f -executable -exec ${TOOLCHAIN}/bin/llvm-strip {} + || true
+find ${STAGING_DIR}${TERMUX_PREFIX}/libexec -type f -executable -exec ${TOOLCHAIN}/bin/llvm-strip {} + || true
 
 dpkg-deb --build ${STAGING_DIR} gcc-16-termux.deb
 
