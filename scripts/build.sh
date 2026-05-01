@@ -28,7 +28,6 @@ if [ ! -d "gcc" ]; then
     
     echo "[*] Extracting GCC tarball..."
     mkdir -p gcc
-    # strip-components ensures the contents fall directly into the 'gcc' folder
     tar -xzf gcc.tar.gz -C gcc --strip-components=1
     rm gcc.tar.gz
 fi
@@ -56,6 +55,11 @@ find . -type f -name "gthr-posix.h" -exec sed -i 's/.*pthread_cancel.*/\/\/ Remo
 # Patch D: Prevent Limits.h generation issues on cross-compiles
 sed -i 's|#define LIMITS_H_TEST true|#define LIMITS_H_TEST false|g' gcc/Makefile.in || true
 
+# Patch E: Remove dumpspecs rule (Prevents Clang from crashing during Crossed-Native GCC builds)
+echo "[*] Disabling dumpspecs to prevent Clang crossed-native conflicts..."
+sed -i '/-dumpspecs/d' gcc/Makefile.in
+sed -i '/mv tmp-specs specs/d' gcc/Makefile.in
+
 echo "[*] Downloading GNU prerequisites (GMP, MPFR, MPC)..."
 ./contrib/download_prerequisites
 cd ..
@@ -64,7 +68,10 @@ cd ..
 mkdir -p build-gcc
 cd build-gcc
 
-echo "[*] Configuring GCC (Enforcing Host-PIE to satisfy Android strictness)..."
+echo "[*] Configuring GCC (Enforcing Host-PIE and suppressing LLVM noise)..."
+
+# Explicitly suppress Clang's aesthetic warnings so the build logs stay clean.
+CLANG_MUTES="-Wno-unknown-warning-option -Wno-mismatched-tags -Wno-missing-braces -Wno-nontrivial-memcall -Wno-ignored-attributes"
 
 ../gcc/configure \
     --build=x86_64-pc-linux-gnu \
@@ -95,8 +102,10 @@ echo "[*] Configuring GCC (Enforcing Host-PIE to satisfy Android strictness)..."
     RANLIB_FOR_TARGET="${TOOLCHAIN}/bin/llvm-ranlib" \
     NM_FOR_TARGET="${TOOLCHAIN}/bin/llvm-nm" \
     STRIP_FOR_TARGET="${TOOLCHAIN}/bin/llvm-strip" \
-    CFLAGS="-O2" \
-    CXXFLAGS="-O2" \
+    CFLAGS="-O2 ${CLANG_MUTES}" \
+    CXXFLAGS="-O2 ${CLANG_MUTES}" \
+    CFLAGS_FOR_TARGET="-O2 -fPIC ${CLANG_MUTES}" \
+    CXXFLAGS_FOR_TARGET="-O2 -fPIC ${CLANG_MUTES}" \
     LDFLAGS="-Wl,-rpath=${TERMUX_PREFIX}/lib -Wl,--enable-new-dtags -L${TERMUX_PREFIX}/lib -Wl,--no-relax" \
     CPPFLAGS="-I${TERMUX_PREFIX}/include" \
     --enable-languages=c,c++ \
@@ -118,6 +127,8 @@ echo "[*] Configuring GCC (Enforcing Host-PIE to satisfy Android strictness)..."
     --disable-werror
 
 # 6. Build GCC
+# Note: If the action ever halts abruptly with NO error, GitHub's RAM limit killed it.
+# If that happens, change "-j$(nproc)" to "-j2"
 echo "[*] Compiling GCC 16.1.0 natively for Target Architecture (aarch64)..."
 make -j$(nproc)
 
@@ -148,7 +159,7 @@ find ${STAGING_DIR}${TERMUX_PREFIX}/libexec -type f -executable -exec ${TOOLCHAI
 
 dpkg-deb --build ${STAGING_DIR} gcc-${GCC_VERSION}-termux.deb
 
-# Compressed backup sysroot artifact (using xz/lzma for massive compression gains)
+# Compressed backup sysroot artifact
 echo "[*] Archiving sysroot with xz compression (this may take a moment)..."
 tar -cJf gcc-${GCC_VERSION}-termux-sysroot.tar.xz -C ${STAGING_DIR} .
 
