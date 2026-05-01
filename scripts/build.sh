@@ -2,11 +2,13 @@
 set -euo pipefail
 
 echo "=========================================================="
-echo " Starting Universal GCC 16 Build for Android API 24"
+echo " Starting Universal GCC 16.1.0 Build for Android API 24"
 echo " Environment: NDK 29.0.14206865"
 echo "=========================================================="
 
-GCC_BRANCH="master"
+GCC_VERSION="16.1.0"
+GCC_TAR_URL="https://github.com/gcc-mirror/gcc/archive/refs/tags/releases/gcc-${GCC_VERSION}.tar.gz"
+
 TARGET="aarch64-linux-android"
 API_LEVEL="24"
 TERMUX_PREFIX="/data/data/com.termux/files/usr"
@@ -19,10 +21,16 @@ TARGET_CLANGXX="${TOOLCHAIN}/bin/${TARGET}${API_LEVEL}-clang++"
 # 2. Mock the environment to prevent build-time linker errors for empty dirs
 mkdir -p "${TERMUX_PREFIX}/lib" "${TERMUX_PREFIX}/include"
 
-# 3. Fetch GCC Source
+# 3. Fetch GCC Source (Using Stable Release Tarball)
 if [ ! -d "gcc" ]; then
-    echo "[*] Cloning GCC repository (branch: ${GCC_BRANCH})..."
-    git clone --depth 1 -b ${GCC_BRANCH} https://gcc.gnu.org/git/gcc.git gcc
+    echo "[*] Downloading GCC ${GCC_VERSION} release tarball..."
+    wget -qO gcc.tar.gz "${GCC_TAR_URL}"
+    
+    echo "[*] Extracting GCC tarball..."
+    mkdir -p gcc
+    # strip-components ensures the contents fall directly into the 'gcc' folder
+    tar -xzf gcc.tar.gz -C gcc --strip-components=1
+    rm gcc.tar.gz
 fi
 
 cd gcc
@@ -58,8 +66,6 @@ cd build-gcc
 
 echo "[*] Configuring GCC (Enforcing Host-PIE to satisfy Android strictness)..."
 
-# Note: Removed manual -fPIC. Added --enable-host-pie and --enable-host-bind-now.
-# Added -Wl,--no-relax to avoid LLD AArch64 strict relocation bugs.
 ../gcc/configure \
     --build=x86_64-pc-linux-gnu \
     --host=${TARGET} \
@@ -112,7 +118,7 @@ echo "[*] Configuring GCC (Enforcing Host-PIE to satisfy Android strictness)..."
     --disable-werror
 
 # 6. Build GCC
-echo "[*] Compiling GCC natively for Target Architecture (aarch64)..."
+echo "[*] Compiling GCC 16.1.0 natively for Target Architecture (aarch64)..."
 make -j$(nproc)
 
 # 7. Install to Staging
@@ -126,12 +132,12 @@ cd ${GITHUB_WORKSPACE}
 
 mkdir -p ${STAGING_DIR}/DEBIAN
 cat <<EOF > ${STAGING_DIR}/DEBIAN/control
-Package: gcc-16
-Version: 16.0.0-1
+Package: gcc
+Version: ${GCC_VERSION}-1
 Architecture: aarch64
 Maintainer: GitHub Actions GCC Pipeline
 Depends: binutils, ndk-sysroot, libiconv, zlib
-Description: Universal GCC 16 Toolchain heavily patched for Android Termux Execution (NDK 29)
+Description: Universal GCC ${GCC_VERSION} Toolchain heavily patched for Android Termux Execution (NDK 29)
 Homepage: https://gcc.gnu.org/
 EOF
 
@@ -140,11 +146,11 @@ echo "[*] Stripping target binaries..."
 find ${STAGING_DIR}${TERMUX_PREFIX}/bin -type f -executable -exec ${TOOLCHAIN}/bin/llvm-strip {} + || true
 find ${STAGING_DIR}${TERMUX_PREFIX}/libexec -type f -executable -exec ${TOOLCHAIN}/bin/llvm-strip {} + || true
 
-dpkg-deb --build ${STAGING_DIR} gcc-16-termux.deb
+dpkg-deb --build ${STAGING_DIR} gcc-${GCC_VERSION}-termux.deb
 
 # Compressed backup sysroot artifact (using xz/lzma for massive compression gains)
 echo "[*] Archiving sysroot with xz compression (this may take a moment)..."
-tar -cJf gcc-16-termux-sysroot.tar.xz -C ${STAGING_DIR} .
+tar -cJf gcc-${GCC_VERSION}-termux-sysroot.tar.xz -C ${STAGING_DIR} .
 
 echo "[*] Pipeline complete!"
 ls -lh *.deb *.tar.xz

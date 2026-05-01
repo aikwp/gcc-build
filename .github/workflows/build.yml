@@ -87,7 +87,7 @@ jobs:
       - name: Upload Artifacts (Action)
         uses: actions/upload-artifact@v7
         with:
-          name: termux-gcc-16-package
+          name: termux-gcc-16.1.0-package
           path: '*.deb'
           retention-days: 7
 
@@ -100,8 +100,8 @@ jobs:
           files: |
             *.deb
             *.tar.xz
-          tag_name: "v16.0.0-ndk29"
-          name: "GCC 16 Universal Termux Build (NDK 29)"
-          body: "Automated, heavily-patched production build of GCC-16 for Android API 24."
+          tag_name: "v16.1.0-ndk29"
+          name: "GCC 16.1.0 Universal Termux Build (NDK 29)"
+          body: "Automated, heavily-patched production build of the GCC 16.1.0 stable release for Android API 24."
           draft: false
           prerelease: false
