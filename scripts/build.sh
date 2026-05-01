@@ -58,7 +58,7 @@ cd build-gcc
 
 echo "[*] Configuring GCC (Strictly passing variables to prevent environment bleeding)..."
 
-# Note: We NO LONGER use global `export`. All flags are passed safely.
+# No global exports. All flags are passed safely.
 ../gcc/configure \
     --build=x86_64-pc-linux-gnu \
     --host=${TARGET} \
@@ -139,8 +139,10 @@ find ${STAGING_DIR}${TERMUX_PREFIX}/libexec -type f -executable -exec ${TOOLCHAI
 
 dpkg-deb --build ${STAGING_DIR} gcc-16-termux.deb
 
-# Compressed backup sysroot artifact
-tar -czf gcc-16-termux-sysroot.tar.gz -C ${STAGING_DIR} .
+# Compressed backup sysroot artifact (using xz/lzma for massive compression gains)
+echo "[*] Archiving sysroot with xz compression (this may take a moment)..."
+# -c: create, -J: use xz compression, -f: to file
+tar -cJf gcc-16-termux-sysroot.tar.xz -C ${STAGING_DIR} .
 
 echo "[*] Pipeline complete!"
-ls -lh *.deb *.tar.gz
+ls -lh *.deb *.tar.xz
