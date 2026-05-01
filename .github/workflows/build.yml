@@ -102,6 +102,6 @@ jobs:
             *.tar.xz
           tag_name: "v16.1.0-ndk29"
           name: "GCC 16.1.0 Universal Termux Build (NDK 29)"
-          body: "Automated, heavily-patched production build of the GCC 16.1.0 stable release for Android API 24."
+          body: "Automated, heavily-patched production build of the GCC 16.1.0 stable release for Android API 24. Cleaned logs and disabled warnings."
           draft: false
           prerelease: false

@@ -21,7 +21,7 @@ TARGET_CLANGXX="${TOOLCHAIN}/bin/${TARGET}${API_LEVEL}-clang++"
 # 2. Mock the environment to prevent build-time linker errors for empty dirs
 mkdir -p "${TERMUX_PREFIX}/lib" "${TERMUX_PREFIX}/include"
 
-# 3. Fetch GCC Source (Using Stable Release Tarball)
+# 3. Fetch GCC Source
 if [ ! -d "gcc" ]; then
     echo "[*] Downloading GCC ${GCC_VERSION} release tarball..."
     wget -qO gcc.tar.gz "${GCC_TAR_URL}"
@@ -55,10 +55,9 @@ find . -type f -name "gthr-posix.h" -exec sed -i 's/.*pthread_cancel.*/\/\/ Remo
 # Patch D: Prevent Limits.h generation issues on cross-compiles
 sed -i 's|#define LIMITS_H_TEST true|#define LIMITS_H_TEST false|g' gcc/Makefile.in || true
 
-# Patch E: Remove dumpspecs rule (Prevents Clang from crashing during Crossed-Native GCC builds)
-echo "[*] Disabling dumpspecs to prevent Clang crossed-native conflicts..."
-sed -i '/-dumpspecs/d' gcc/Makefile.in
-sed -i '/mv tmp-specs specs/d' gcc/Makefile.in
+# Patch E: Bypass `-dumpspecs` failure on NDK Clang (Critical Fix)
+echo "[*] Bypassing dumpspecs to prevent Clang crossed-native crash..."
+sed -i 's|$(GCC_FOR_TARGET) -dumpspecs > tmp-specs|echo "" > tmp-specs|g' gcc/Makefile.in || true
 
 echo "[*] Downloading GNU prerequisites (GMP, MPFR, MPC)..."
 ./contrib/download_prerequisites
@@ -68,10 +67,10 @@ cd ..
 mkdir -p build-gcc
 cd build-gcc
 
-echo "[*] Configuring GCC (Enforcing Host-PIE and suppressing LLVM noise)..."
+echo "[*] Configuring GCC (Enforcing Host-PIE and completely silencing LLVM warnings)..."
 
-# Explicitly suppress Clang's aesthetic warnings so the build logs stay clean.
-CLANG_MUTES="-Wno-unknown-warning-option -Wno-mismatched-tags -Wno-missing-braces -Wno-nontrivial-memcall -Wno-ignored-attributes"
+# -w perfectly disables all Clang warnings to keep the build logs short and clean
+SILENT_FLAGS="-O2 -w -Wno-error"
 
 ../gcc/configure \
     --build=x86_64-pc-linux-gnu \
@@ -102,13 +101,14 @@ CLANG_MUTES="-Wno-unknown-warning-option -Wno-mismatched-tags -Wno-missing-brace
     RANLIB_FOR_TARGET="${TOOLCHAIN}/bin/llvm-ranlib" \
     NM_FOR_TARGET="${TOOLCHAIN}/bin/llvm-nm" \
     STRIP_FOR_TARGET="${TOOLCHAIN}/bin/llvm-strip" \
-    CFLAGS="-O2 ${CLANG_MUTES}" \
-    CXXFLAGS="-O2 ${CLANG_MUTES}" \
-    CFLAGS_FOR_TARGET="-O2 -fPIC ${CLANG_MUTES}" \
-    CXXFLAGS_FOR_TARGET="-O2 -fPIC ${CLANG_MUTES}" \
+    CFLAGS="${SILENT_FLAGS}" \
+    CXXFLAGS="${SILENT_FLAGS}" \
+    CFLAGS_FOR_TARGET="${SILENT_FLAGS} -fPIC" \
+    CXXFLAGS_FOR_TARGET="${SILENT_FLAGS} -fPIC" \
     LDFLAGS="-Wl,-rpath=${TERMUX_PREFIX}/lib -Wl,--enable-new-dtags -L${TERMUX_PREFIX}/lib -Wl,--no-relax" \
     CPPFLAGS="-I${TERMUX_PREFIX}/include" \
     --enable-languages=c,c++ \
+    --disable-bootstrap \
     --disable-multilib \
     --disable-nls \
     --disable-libsanitizer \
@@ -127,8 +127,6 @@ CLANG_MUTES="-Wno-unknown-warning-option -Wno-mismatched-tags -Wno-missing-brace
     --disable-werror
 
 # 6. Build GCC
-# Note: If the action ever halts abruptly with NO error, GitHub's RAM limit killed it.
-# If that happens, change "-j$(nproc)" to "-j2"
 echo "[*] Compiling GCC 16.1.0 natively for Target Architecture (aarch64)..."
 make -j$(nproc)
 
@@ -152,7 +150,7 @@ Description: Universal GCC ${GCC_VERSION} Toolchain heavily patched for Android 
 Homepage: https://gcc.gnu.org/
 EOF
 
-# Vigorously strip compiler executables to minimize the final .deb package footprint
+# Strip compiler executables to minimize the final .deb package footprint
 echo "[*] Stripping target binaries..."
 find ${STAGING_DIR}${TERMUX_PREFIX}/bin -type f -executable -exec ${TOOLCHAIN}/bin/llvm-strip {} + || true
 find ${STAGING_DIR}${TERMUX_PREFIX}/libexec -type f -executable -exec ${TOOLCHAIN}/bin/llvm-strip {} + || true
