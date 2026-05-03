@@ -78,7 +78,6 @@ cd build-gcc
 
 echo "[*] Configuring GCC (Enforcing Host-PIE and completely silencing LLVM warnings)..."
 
-# -w perfectly disables all Clang warnings to keep the build logs short and clean
 SILENT_FLAGS="-O2 -w -Wno-error"
 
 ../gcc/configure \
@@ -141,12 +140,12 @@ make -j$(nproc)
 
 # 7. Install to Staging
 echo "[*] Installing to staging directory..."
-STAGING_DIR="${GITHUB_WORKSPACE}/termux-pkg"
+STAGING_DIR="/workspace/termux-pkg"
 make DESTDIR=${STAGING_DIR} install
 
 # 8. Packaging (.deb)
 echo "[*] Packaging into a Universal Termux compatible .deb file..."
-cd ${GITHUB_WORKSPACE}
+cd /workspace
 
 mkdir -p ${STAGING_DIR}/DEBIAN
 cat <<EOF > ${STAGING_DIR}/DEBIAN/control
