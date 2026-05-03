@@ -37,7 +37,6 @@ jobs:
           context: .
           file: docker/Dockerfile
           push: false
-          # MAGIC: Dumps the / folder of the 'scratch' image to the runner's ./artifacts folder
           outputs: type=local,dest=artifacts
           cache-from: type=registry,ref=ghcr.io/${{ github.repository_owner }}/gcc-ndk29-cache:buildcache
           cache-to: type=registry,ref=ghcr.io/${{ github.repository_owner }}/gcc-ndk29-cache:buildcache,mode=max
@@ -58,6 +57,6 @@ jobs:
           files: artifacts/*
           tag_name: "v16.1.0-ndk29"
           name: "GCC 16.1.0 Universal Termux Build (NDK 29)"
-          body: "Automated, heavily-patched production build of the GCC 16.1.0 stable release for Android API 24. Extracted securely via Docker Scratch."
+          body: "Automated, heavily-patched production build of the GCC 16.1.0 stable release for Android API 24."
           draft: false
           prerelease: false

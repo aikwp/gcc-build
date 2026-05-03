@@ -18,15 +18,12 @@ TOOLCHAIN="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64"
 TARGET_CLANG="${TOOLCHAIN}/bin/${TARGET}${API_LEVEL}-clang"
 TARGET_CLANGXX="${TOOLCHAIN}/bin/${TARGET}${API_LEVEL}-clang++"
 
-# 2. Mock the environment to prevent build-time linker errors for empty dirs
 mkdir -p "${TERMUX_PREFIX}/lib" "${TERMUX_PREFIX}/include"
 
 # 3. Fetch GCC Source
 if [ ! -d "gcc" ]; then
     echo "[*] Downloading GCC ${GCC_VERSION} release tarball..."
     wget -qO gcc.tar.gz "${GCC_TAR_URL}"
-    
-    echo "[*] Extracting GCC tarball..."
     mkdir -p gcc
     tar -xzf gcc.tar.gz -C gcc --strip-components=1
     rm gcc.tar.gz
@@ -39,40 +36,31 @@ cd gcc
 # ====================================================================
 echo "[*] Applying heavy expert patches for Android/Bionic & Termux..."
 
-# Patch A: Rewrite linker paths in GCC specs for aarch64
 sed -i "s|/system/bin/linker64|${TERMUX_PREFIX}/lib/linker64|g" gcc/config/aarch64/aarch64-linux.h || true
 sed -i "s|/system/bin/linker|${TERMUX_PREFIX}/lib/linker|g" gcc/config/linux-android.h || true
 sed -i "s|/system/bin/linker64|${TERMUX_PREFIX}/lib/linker64|g" gcc/config/linux-android.h || true
 
-# Patch B: Inject Termux Library Search Paths into Android Spec
 sed -i "s|-X|-X -rpath=${TERMUX_PREFIX}/lib -L${TERMUX_PREFIX}/lib|g" gcc/config/linux-android.h || true
 sed -i "s|-rpath-link|-rpath-link=${TERMUX_PREFIX}/lib -rpath-link|g" gcc/config/linux-android.h || true
 
-# Patch C: Universal Bionic libc compatibility (Disable pthread_cancel)
 echo "[*] Purging pthread_cancel for Android Bionic compatibility..."
 find . -type f -name "gthr-posix.h" -exec sed -i 's/.*pthread_cancel.*/\/\/ Removed for Android Bionic compatibility/g' {} + || true
 
-# Patch D: Prevent Limits.h generation issues on cross-compiles
 sed -i 's|#define LIMITS_H_TEST true|#define LIMITS_H_TEST false|g' gcc/Makefile.in || true
 
-# Patch E: Bypass `-dumpspecs` failure on NDK Clang
 echo "[*] Bypassing dumpspecs to prevent Clang crossed-native crash..."
 sed -i 's|$(GCC_FOR_TARGET) -dumpspecs > tmp-specs|echo "" > tmp-specs|g' gcc/Makefile.in || true
 
-# Patch F: Bypass GCC self-tests (Fixes: clang: error: unknown argument: '-fself-test')
-echo "[*] Bypassing internal GCC self-tests (incompatible with Clang CC_FOR_TARGET)..."
-sed -i 's/-fself-test=[^ ]*//g' gcc/Makefile.in || true
-find gcc -type f -name "Make-lang.in" -exec sed -i 's/-fself-test=[^ ]*//g' {} + || true
+echo "[*] Stripping GCC-specific flags that break Clang CC_FOR_TARGET..."
+find . -type f -name "*Makefile*" -exec sed -i 's/-fself-test=[^ ]*//g' {} + || true
+find . -type f -name "*.in" -exec sed -i 's/-fself-test=[^ ]*//g' {} + || true
+find . -type f -name "*Makefile*" -exec sed -i 's/-fbuilding-libgcc//g' {} + || true
+find . -type f -name "*.in" -exec sed -i 's/-fbuilding-libgcc//g' {} + || true
 
-# Patch G: Bypass GCC libgcc flag (Fixes: clang: error: unknown argument: '-fbuilding-libgcc')
-echo "[*] Stripping GCC-specific -fbuilding-libgcc flag from libgcc Makefiles..."
-find libgcc -type f -exec sed -i 's/-fbuilding-libgcc//g' {} + || true
-
-echo "[*] Downloading GNU prerequisites (GMP, MPFR, MPC)..."
+echo "[*] Downloading GNU prerequisites..."
 ./contrib/download_prerequisites
 cd ..
 
-# 5. Configure GCC
 mkdir -p build-gcc
 cd build-gcc
 
@@ -91,12 +79,12 @@ SILENT_FLAGS="-O2 -w -Wno-error"
     CXX_FOR_BUILD="g++" \
     CFLAGS_FOR_BUILD="-O2" \
     CXXFLAGS_FOR_BUILD="-O2" \
-    LDFLAGS_FOR_BUILD="" \
-    CPPFLAGS_FOR_BUILD="" \
     CC="${TARGET_CLANG}" \
     CXX="${TARGET_CLANGXX}" \
     CC_FOR_TARGET="${TARGET_CLANG}" \
     CXX_FOR_TARGET="${TARGET_CLANGXX}" \
+    GCC_FOR_TARGET="${TARGET_CLANG}" \
+    RAW_CXX_FOR_TARGET="${TARGET_CLANGXX}" \
     AR="${TOOLCHAIN}/bin/llvm-ar" \
     AS="${TOOLCHAIN}/bin/llvm-as" \
     LD="${TOOLCHAIN}/bin/ld.lld" \
@@ -124,6 +112,8 @@ SILENT_FLAGS="-O2 -w -Wno-error"
     --disable-libgomp \
     --disable-libquadmath \
     --disable-libitm \
+    --disable-libstdcxx \
+    --disable-fixincludes \
     --enable-shared \
     --enable-initfini-array \
     --enable-host-pie \
@@ -134,16 +124,14 @@ SILENT_FLAGS="-O2 -w -Wno-error"
     --with-arch=armv8-a \
     --disable-werror
 
-# 6. Build GCC
-echo "[*] Compiling GCC 16.1.0 natively for Target Architecture (aarch64)..."
-make -j$(nproc)
+echo "[*] Compiling GCC 16.1.0 natively for Target Architecture..."
+# CRITICAL FIX: Limit to 2 jobs to prevent GitHub Actions 7GB RAM Out-Of-Memory silent kills!
+make -j2
 
-# 7. Install to Staging
 echo "[*] Installing to staging directory..."
 STAGING_DIR="/workspace/termux-pkg"
 make DESTDIR=${STAGING_DIR} install
 
-# 8. Packaging (.deb)
 echo "[*] Packaging into a Universal Termux compatible .deb file..."
 cd /workspace
 
@@ -158,15 +146,13 @@ Description: Universal GCC ${GCC_VERSION} Toolchain heavily patched for Android 
 Homepage: https://gcc.gnu.org/
 EOF
 
-# Strip compiler executables to minimize the final .deb package footprint
 echo "[*] Stripping target binaries..."
 find ${STAGING_DIR}${TERMUX_PREFIX}/bin -type f -executable -exec ${TOOLCHAIN}/bin/llvm-strip {} + || true
 find ${STAGING_DIR}${TERMUX_PREFIX}/libexec -type f -executable -exec ${TOOLCHAIN}/bin/llvm-strip {} + || true
 
 dpkg-deb --build ${STAGING_DIR} gcc-${GCC_VERSION}-termux.deb
 
-# Compressed backup sysroot artifact
-echo "[*] Archiving sysroot with xz compression (this may take a moment)..."
+echo "[*] Archiving sysroot with xz compression..."
 tar -cJf gcc-${GCC_VERSION}-termux-sysroot.tar.xz -C ${STAGING_DIR} .
 
 echo "[*] Pipeline complete!"
