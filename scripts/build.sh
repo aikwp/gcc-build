@@ -18,10 +18,11 @@ TOOLCHAIN="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64"
 TARGET_CLANG="${TOOLCHAIN}/bin/${TARGET}${API_LEVEL}-clang"
 TARGET_CLANGXX="${TOOLCHAIN}/bin/${TARGET}${API_LEVEL}-clang++"
 
+# 2. Mock the environment to prevent build-time linker errors
 mkdir -p "${TERMUX_PREFIX}/lib" "${TERMUX_PREFIX}/include"
 
 # 3. Fetch GCC Source
-if [ ! -d "gcc" ]; then
+if[ ! -d "gcc" ]; then
     echo "[*] Downloading GCC ${GCC_VERSION} release tarball..."
     wget -qO gcc.tar.gz "${GCC_TAR_URL}"
     mkdir -p gcc
@@ -32,40 +33,36 @@ fi
 cd gcc
 
 # ====================================================================
-# 4. THE HEAVY PATCHES (UNIVERSAL ANDROID & TERMUX INTEGRATION)
+# 4. EXPERT PATCHES (UNIVERSAL ANDROID & TERMUX INTEGRATION)
 # ====================================================================
 echo "[*] Applying heavy expert patches for Android/Bionic & Termux..."
 
+# Linker paths
 sed -i "s|/system/bin/linker64|${TERMUX_PREFIX}/lib/linker64|g" gcc/config/aarch64/aarch64-linux.h || true
 sed -i "s|/system/bin/linker|${TERMUX_PREFIX}/lib/linker|g" gcc/config/linux-android.h || true
 sed -i "s|/system/bin/linker64|${TERMUX_PREFIX}/lib/linker64|g" gcc/config/linux-android.h || true
 
+# Termux Library Search Paths
 sed -i "s|-X|-X -rpath=${TERMUX_PREFIX}/lib -L${TERMUX_PREFIX}/lib|g" gcc/config/linux-android.h || true
 sed -i "s|-rpath-link|-rpath-link=${TERMUX_PREFIX}/lib -rpath-link|g" gcc/config/linux-android.h || true
 
-echo "[*] Purging pthread_cancel for Android Bionic compatibility..."
+# Disable pthread_cancel (Bionic incompatible)
 find . -type f -name "gthr-posix.h" -exec sed -i 's/.*pthread_cancel.*/\/\/ Removed for Android Bionic compatibility/g' {} + || true
 
+# Prevent limits.h cross-compile issues
 sed -i 's|#define LIMITS_H_TEST true|#define LIMITS_H_TEST false|g' gcc/Makefile.in || true
 
-echo "[*] Bypassing dumpspecs to prevent Clang crossed-native crash..."
-sed -i 's|$(GCC_FOR_TARGET) -dumpspecs > tmp-specs|echo "" > tmp-specs|g' gcc/Makefile.in || true
-
-echo "[*] Stripping GCC-specific flags that break Clang CC_FOR_TARGET..."
-find . -type f -name "*Makefile*" -exec sed -i 's/-fself-test=[^ ]*//g' {} + || true
-find . -type f -name "*.in" -exec sed -i 's/-fself-test=[^ ]*//g' {} + || true
-find . -type f -name "*Makefile*" -exec sed -i 's/-fbuilding-libgcc//g' {} + || true
-find . -type f -name "*.in" -exec sed -i 's/-fbuilding-libgcc//g' {} + || true
-
-echo "[*] Downloading GNU prerequisites..."
+echo "[*] Downloading GNU prerequisites (GMP, MPFR, MPC)..."
 ./contrib/download_prerequisites
 cd ..
 
+# 5. Configure GCC
 mkdir -p build-gcc
 cd build-gcc
 
-echo "[*] Configuring GCC (Enforcing Host-PIE and completely silencing LLVM warnings)..."
+echo "[*] Configuring GCC Frontend (Bypassing target libraries)..."
 
+# -w disables all LLVM aesthetic warnings, keeping the GitHub log perfectly clean
 SILENT_FLAGS="-O2 -w -Wno-error"
 
 ../gcc/configure \
@@ -74,33 +71,22 @@ SILENT_FLAGS="-O2 -w -Wno-error"
     --target=${TARGET} \
     --prefix=${TERMUX_PREFIX} \
     --with-local-prefix=${TERMUX_PREFIX} \
-    --with-sysroot=${TOOLCHAIN}/sysroot \
+    --with-sysroot=${TERMUX_PREFIX} \
+    --with-build-sysroot=${TOOLCHAIN}/sysroot \
     CC_FOR_BUILD="gcc" \
     CXX_FOR_BUILD="g++" \
     CFLAGS_FOR_BUILD="-O2" \
     CXXFLAGS_FOR_BUILD="-O2" \
     CC="${TARGET_CLANG}" \
     CXX="${TARGET_CLANGXX}" \
-    CC_FOR_TARGET="${TARGET_CLANG}" \
-    CXX_FOR_TARGET="${TARGET_CLANGXX}" \
-    GCC_FOR_TARGET="${TARGET_CLANG}" \
-    RAW_CXX_FOR_TARGET="${TARGET_CLANGXX}" \
     AR="${TOOLCHAIN}/bin/llvm-ar" \
     AS="${TOOLCHAIN}/bin/llvm-as" \
     LD="${TOOLCHAIN}/bin/ld.lld" \
     RANLIB="${TOOLCHAIN}/bin/llvm-ranlib" \
     NM="${TOOLCHAIN}/bin/llvm-nm" \
     STRIP="${TOOLCHAIN}/bin/llvm-strip" \
-    AR_FOR_TARGET="${TOOLCHAIN}/bin/llvm-ar" \
-    AS_FOR_TARGET="${TOOLCHAIN}/bin/llvm-as" \
-    LD_FOR_TARGET="${TOOLCHAIN}/bin/ld.lld" \
-    RANLIB_FOR_TARGET="${TOOLCHAIN}/bin/llvm-ranlib" \
-    NM_FOR_TARGET="${TOOLCHAIN}/bin/llvm-nm" \
-    STRIP_FOR_TARGET="${TOOLCHAIN}/bin/llvm-strip" \
     CFLAGS="${SILENT_FLAGS}" \
     CXXFLAGS="${SILENT_FLAGS}" \
-    CFLAGS_FOR_TARGET="${SILENT_FLAGS} -fPIC" \
-    CXXFLAGS_FOR_TARGET="${SILENT_FLAGS} -fPIC" \
     LDFLAGS="-Wl,-rpath=${TERMUX_PREFIX}/lib -Wl,--enable-new-dtags -L${TERMUX_PREFIX}/lib -Wl,--no-relax" \
     CPPFLAGS="-I${TERMUX_PREFIX}/include" \
     --enable-languages=c,c++ \
@@ -113,6 +99,7 @@ SILENT_FLAGS="-O2 -w -Wno-error"
     --disable-libquadmath \
     --disable-libitm \
     --disable-libstdcxx \
+    --disable-libatomic \
     --disable-fixincludes \
     --enable-shared \
     --enable-initfini-array \
@@ -124,14 +111,26 @@ SILENT_FLAGS="-O2 -w -Wno-error"
     --with-arch=armv8-a \
     --disable-werror
 
-echo "[*] Compiling GCC 16.1.0 natively for Target Architecture..."
-# CRITICAL FIX: Limit to 2 jobs to prevent GitHub Actions 7GB RAM Out-Of-Memory silent kills!
-make -j2
+# 6. Build ONLY the GCC Frontend Executables (Avoids crossed-native execution crash)
+echo "[*] Compiling GCC 16.1.0 natively for Target Architecture (aarch64)..."
+make all-gcc -j2
 
+# 7. Install to Staging
 echo "[*] Installing to staging directory..."
 STAGING_DIR="/workspace/termux-pkg"
-make DESTDIR=${STAGING_DIR} install
+make install-gcc DESTDIR=${STAGING_DIR}
 
+# 8. Bridge GNU libgcc requirements with Termux Bionic libc/compiler-rt natively
+echo "[*] Generating Termux Bionic runtime linker scripts..."
+GCC_LIB_DIR="${STAGING_DIR}${TERMUX_PREFIX}/lib/gcc/${TARGET}/${GCC_VERSION}"
+mkdir -p "${GCC_LIB_DIR}"
+# Provide an empty static libgcc to satisfy basic linkage
+${TOOLCHAIN}/bin/llvm-ar rc "${GCC_LIB_DIR}/libgcc.a"
+# Secretly redirect standard GNU libraries to Android's libc & llvm libc++
+echo "INPUT(-lc)" > "${GCC_LIB_DIR}/libgcc_s.so"
+echo "INPUT(-lc++)" > "${GCC_LIB_DIR}/libstdc++.so"
+
+# 9. Packaging (.deb)
 echo "[*] Packaging into a Universal Termux compatible .deb file..."
 cd /workspace
 

@@ -32,6 +32,5 @@ RUN chmod +x /workspace/build.sh && /workspace/build.sh
 # STAGE 2: The Scratch Artifact Exporter
 # ==========================================
 FROM scratch
-# We extract ONLY the final generated artifacts into an empty void.
 COPY --from=builder /workspace/gcc-16.1.0-termux.deb /
 COPY --from=builder /workspace/gcc-16.1.0-termux-sysroot.tar.xz /
