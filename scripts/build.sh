@@ -22,7 +22,7 @@ TARGET_CLANGXX="${TOOLCHAIN}/bin/${TARGET}${API_LEVEL}-clang++"
 mkdir -p "${TERMUX_PREFIX}/lib" "${TERMUX_PREFIX}/include"
 
 # 3. Fetch GCC Source
-if[ ! -d "gcc" ]; then
+if [ ! -d "gcc" ]; then
     echo "[*] Downloading GCC ${GCC_VERSION} release tarball..."
     wget -qO gcc.tar.gz "${GCC_TAR_URL}"
     mkdir -p gcc
