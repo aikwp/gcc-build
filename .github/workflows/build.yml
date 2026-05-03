@@ -3,7 +3,7 @@ name: Universal GCC 16 Build Pipeline (Android/Termux)
 on:
   push:
     branches: [ main ]
-    tags:[ 'v*.*.*' ]
+    tags: [ 'v*.*.*' ]
   pull_request:
     branches: [ main ]
   workflow_dispatch:
