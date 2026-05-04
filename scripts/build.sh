@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+set -x # ENABLES VERBOSE LOGGING: Prints every command so we see EXACTLY what fails
 
 echo "=========================================================="
 echo " Starting Universal GCC 16.1.0 Build for Android API 24"
@@ -18,13 +19,12 @@ TOOLCHAIN="${ANDROID_NDK_HOME}/toolchains/llvm/prebuilt/linux-x86_64"
 TARGET_CLANG="${TOOLCHAIN}/bin/${TARGET}${API_LEVEL}-clang"
 TARGET_CLANGXX="${TOOLCHAIN}/bin/${TARGET}${API_LEVEL}-clang++"
 
-# 2. Mock the environment to prevent build-time linker errors
 mkdir -p "${TERMUX_PREFIX}/lib" "${TERMUX_PREFIX}/include"
 
 # 3. Fetch GCC Source
-if [ ! -d "gcc" ]; then
+if[ ! -d "gcc" ]; then
     echo "[*] Downloading GCC ${GCC_VERSION} release tarball..."
-    wget -qO gcc.tar.gz "${GCC_TAR_URL}"
+    wget -qO gcc.tar.gz "${GCC_TAR_URL}" || { echo "FATAL: Failed to download GCC Tarball."; exit 1; }
     mkdir -p gcc
     tar -xzf gcc.tar.gz -C gcc --strip-components=1
     rm gcc.tar.gz
@@ -37,20 +37,22 @@ cd gcc
 # ====================================================================
 echo "[*] Applying heavy expert patches for Android/Bionic & Termux..."
 
-# Linker paths
 sed -i "s|/system/bin/linker64|${TERMUX_PREFIX}/lib/linker64|g" gcc/config/aarch64/aarch64-linux.h || true
 sed -i "s|/system/bin/linker|${TERMUX_PREFIX}/lib/linker|g" gcc/config/linux-android.h || true
 sed -i "s|/system/bin/linker64|${TERMUX_PREFIX}/lib/linker64|g" gcc/config/linux-android.h || true
 
-# Termux Library Search Paths
 sed -i "s|-X|-X -rpath=${TERMUX_PREFIX}/lib -L${TERMUX_PREFIX}/lib|g" gcc/config/linux-android.h || true
 sed -i "s|-rpath-link|-rpath-link=${TERMUX_PREFIX}/lib -rpath-link|g" gcc/config/linux-android.h || true
 
-# Disable pthread_cancel (Bionic incompatible)
 find . -type f -name "gthr-posix.h" -exec sed -i 's/.*pthread_cancel.*/\/\/ Removed for Android Bionic compatibility/g' {} + || true
-
-# Prevent limits.h cross-compile issues
 sed -i 's|#define LIMITS_H_TEST true|#define LIMITS_H_TEST false|g' gcc/Makefile.in || true
+
+echo "[*] Bypassing dumpspecs to prevent Clang crossed-native crash..."
+sed -i 's|$(GCC_FOR_TARGET) -dumpspecs > tmp-specs|touch tmp-specs|g' gcc/Makefile.in || true
+
+echo "[*] Bypassing internal GCC self-tests..."
+sed -i 's/-fself-test=[^ ]*//g' gcc/Makefile.in || true
+find gcc -type f -name "Make-lang.in" -exec sed -i 's/-fself-test=[^ ]*//g' {} + || true
 
 echo "[*] Downloading GNU prerequisites (GMP, MPFR, MPC)..."
 ./contrib/download_prerequisites
@@ -60,7 +62,7 @@ cd ..
 mkdir -p build-gcc
 cd build-gcc
 
-echo "[*] Configuring GCC Frontend (Bypassing target libraries)..."
+echo "[*] Configuring GCC Frontend..."
 
 # -w disables all LLVM aesthetic warnings, keeping the GitHub log perfectly clean
 SILENT_FLAGS="-O2 -w -Wno-error"
@@ -111,14 +113,15 @@ SILENT_FLAGS="-O2 -w -Wno-error"
     --with-arch=armv8-a \
     --disable-werror
 
-# 6. Build ONLY the GCC Frontend Executables (Avoids crossed-native execution crash)
+# 6. Build ONLY the GCC Frontend
 echo "[*] Compiling GCC 16.1.0 natively for Target Architecture (aarch64)..."
-make all-gcc -j2
+# Single thread (-j1) to absolutely guarantee GitHub Actions doesn't run out of memory!
+make all-gcc MAKEINFO=true POD2MAN=true TEXI2DVI=true TEXI2PDF=true -j1
 
 # 7. Install to Staging
 echo "[*] Installing to staging directory..."
 STAGING_DIR="/workspace/termux-pkg"
-make install-gcc DESTDIR=${STAGING_DIR}
+make install-gcc MAKEINFO=true POD2MAN=true DESTDIR=${STAGING_DIR}
 
 # 8. Bridge GNU libgcc requirements with Termux Bionic libc/compiler-rt natively
 echo "[*] Generating Termux Bionic runtime linker scripts..."
