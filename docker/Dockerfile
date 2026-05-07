@@ -12,7 +12,7 @@ ENV PATH=${PATH}:${ANDROID_HOME}/cmdline-tools/latest/bin:${ANDROID_NDK_HOME}/to
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential curl wget git unzip python3 \
     bison flex texinfo gawk libgmp-dev libmpfr-dev libmpc-dev zlib1g-dev \
-    openjdk-17-jdk-headless dpkg-dev file cmake patch m4 xz-utils perl \
+    openjdk-17-jdk-headless dpkg-dev file cmake patch m4 xz-utils perl texinfo \
     && rm -rf /var/lib/apt/lists/*
 
 RUN mkdir -p ${ANDROID_HOME}/cmdline-tools && \
@@ -27,7 +27,7 @@ RUN yes | sdkmanager --licenses && \
 WORKDIR /workspace
 COPY scripts/build.sh /workspace/build.sh
 
-# Strip Windows line-endings (CRLF) and execute
+# Strip Windows line-endings (CRLF) and execute the build script
 RUN sed -i 's/\r$//' /workspace/build.sh && \
     chmod +x /workspace/build.sh && \
     /workspace/build.sh

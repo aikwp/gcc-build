@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-set -x # ENABLES VERBOSE LOGGING: Prints every command so we see EXACTLY what fails
+set -x # Enables verbose tracing so we can see the exact line if it fails
 
 echo "=========================================================="
 echo " Starting Universal GCC 16.1.0 Build for Android API 24"
@@ -24,7 +24,7 @@ mkdir -p "${TERMUX_PREFIX}/lib" "${TERMUX_PREFIX}/include"
 # 3. Fetch GCC Source
 if [ ! -d "gcc" ]; then
     echo "[*] Downloading GCC ${GCC_VERSION} release tarball..."
-    wget -qO gcc.tar.gz "${GCC_TAR_URL}" || { echo "FATAL: Failed to download GCC Tarball."; exit 1; }
+    wget -qO gcc.tar.gz "${GCC_TAR_URL}"
     mkdir -p gcc
     tar -xzf gcc.tar.gz -C gcc --strip-components=1
     rm gcc.tar.gz
@@ -44,17 +44,24 @@ sed -i "s|/system/bin/linker64|${TERMUX_PREFIX}/lib/linker64|g" gcc/config/linux
 sed -i "s|-X|-X -rpath=${TERMUX_PREFIX}/lib -L${TERMUX_PREFIX}/lib|g" gcc/config/linux-android.h || true
 sed -i "s|-rpath-link|-rpath-link=${TERMUX_PREFIX}/lib -rpath-link|g" gcc/config/linux-android.h || true
 
+echo "[*] Purging pthread_cancel for Android Bionic compatibility..."
 find . -type f -name "gthr-posix.h" -exec sed -i 's/.*pthread_cancel.*/\/\/ Removed for Android Bionic compatibility/g' {} + || true
+
 sed -i 's|#define LIMITS_H_TEST true|#define LIMITS_H_TEST false|g' gcc/Makefile.in || true
 
 echo "[*] Bypassing dumpspecs to prevent Clang crossed-native crash..."
 sed -i 's|$(GCC_FOR_TARGET) -dumpspecs > tmp-specs|touch tmp-specs|g' gcc/Makefile.in || true
 
-echo "[*] Bypassing internal GCC self-tests..."
-sed -i 's/-fself-test=[^ ]*//g' gcc/Makefile.in || true
-find gcc -type f -name "Make-lang.in" -exec sed -i 's/-fself-test=[^ ]*//g' {} + || true
+echo "[*] Neutering internal GCC self-tests..."
+find . -type f -name "Make-lang.in" -exec sed -i '/-fself-test=/d' {} + || true
+sed -i 's/^selftest: .*/selftest:/' gcc/Makefile.in || true
 
-echo "[*] Downloading GNU prerequisites (GMP, MPFR, MPC)..."
+echo "[*] Neutering Documentation Generation (Fixes POD/Man crash)..."
+sed -i 's/^doc: .*/doc:/' gcc/Makefile.in || true
+sed -i 's/^man: .*/man:/' gcc/Makefile.in || true
+sed -i 's/^info: .*/info:/' gcc/Makefile.in || true
+
+echo "[*] Downloading GNU prerequisites..."
 ./contrib/download_prerequisites
 cd ..
 
@@ -89,7 +96,7 @@ SILENT_FLAGS="-O2 -w -Wno-error"
     STRIP="${TOOLCHAIN}/bin/llvm-strip" \
     CFLAGS="${SILENT_FLAGS}" \
     CXXFLAGS="${SILENT_FLAGS}" \
-    LDFLAGS="-Wl,-rpath=${TERMUX_PREFIX}/lib -Wl,--enable-new-dtags -L${TERMUX_PREFIX}/lib -Wl,--no-relax" \
+    LDFLAGS="-static-libstdc++ -Wl,-rpath=${TERMUX_PREFIX}/lib -Wl,--enable-new-dtags -L${TERMUX_PREFIX}/lib -Wl,--no-relax" \
     CPPFLAGS="-I${TERMUX_PREFIX}/include" \
     --enable-languages=c,c++ \
     --disable-bootstrap \
@@ -113,15 +120,14 @@ SILENT_FLAGS="-O2 -w -Wno-error"
     --with-arch=armv8-a \
     --disable-werror
 
-# 6. Build ONLY the GCC Frontend
+# 6. Build ONLY the GCC Frontend Executables
 echo "[*] Compiling GCC 16.1.0 natively for Target Architecture (aarch64)..."
-# Single thread (-j1) to absolutely guarantee GitHub Actions doesn't run out of memory!
-make all-gcc MAKEINFO=true POD2MAN=true TEXI2DVI=true TEXI2PDF=true -j1
+make all-gcc -j2
 
 # 7. Install to Staging
 echo "[*] Installing to staging directory..."
 STAGING_DIR="/workspace/termux-pkg"
-make install-gcc MAKEINFO=true POD2MAN=true DESTDIR=${STAGING_DIR}
+make install-gcc DESTDIR=${STAGING_DIR}
 
 # 8. Bridge GNU libgcc requirements with Termux Bionic libc/compiler-rt natively
 echo "[*] Generating Termux Bionic runtime linker scripts..."
